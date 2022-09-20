@@ -64,6 +64,69 @@ signal meta;
 unsigned long ms;
 uint16_t dataWeather[8];
 
+//WiFi&OTA 参数
+String HOSTNAME = "CPN-";
+#define PASSWORD "green7650" //the password for OTA upgrade, can set it in any char you want
+
+void setup()
+{
+  HeartBeat();
+  Serial.begin(115200);
+  modbus.begin(9600, SERIAL_8N1, 16, 17);
+  runner.init();
+  Serial.println("Initialized scheduler");
+  runner.addTask(t1);
+  Serial.println("added t1");
+  runner.addTask(t2);
+  Serial.println("added t2");
+  HeartBeat();
+  delay(2000);
+  t1.enable();  Serial.println("Enabled t1");
+  t2.enable();  Serial.println("Enabled t2");
+  HeartBeat();
+  HOSTNAME.concat(getMacAddress());
+  SerialBT.begin(HOSTNAME); //Bluetooth device name
+  SerialBT.println(HOSTNAME);
+  AISnb.debug = true;
+  AISnb.setupDevice(serverPort);
+  HeartBeat();
+  _init();
+  HeartBeat();
+  _loadConfig();
+  Serial.println();
+  Serial.println(F("***********************************"));
+  Serial.println("Initialize...");
+  HeartBeat();
+  setupWIFI();
+  HeartBeat();
+  setupOTA();
+  HeartBeat();
+}
+
+void loop()
+{
+  runner.execute();
+  ArduinoOTA.handle();
+  ms = millis();
+  if (ms % 600000 == 0)
+  {
+    Serial.println("Attach WiFi for，OTA "); Serial.println(WiFi.RSSI() );
+    SerialBT.println("Attach WiFi for OTA"); SerialBT.println(WiFi.RSSI() );
+    setupWIFI();
+    HeartBeat();
+    setupOTA();
+  }
+  if (ms % 60000 == 0)
+  {
+    Serial.println("Waiting for，OTA now"); Serial.println(WiFi.RSSI() );
+    SerialBT.println("Waiting for, OTA now"); SerialBT.println(WiFi.RSSI() );
+  }
+  if (ms % 10000 == 0)
+  {
+    HeartBeat();
+  }
+}
+
 void _writeEEPROM(String data) {
   Serial.print("Writing Data:");
   Serial.println(data);
@@ -96,8 +159,10 @@ void _init() {
     UDPSend udp = AISnb.sendUDPmsgStr(serverIP, serverPort, _config);
     dataJson = "";
     deviceToken = AISnb.getNCCID();
-    Serial.print("nccid:");
+    Serial.print("NCCID : ");
     Serial.println(deviceToken);
+    SerialBT.print("NCCID : ");
+    SerialBT.println(deviceToken);
     UDPReceive resp = AISnb.waitResponse();
     AISnb.receive_UDP(resp);
     Serial.print("waitData:");
@@ -168,12 +233,8 @@ String read_String(char add)
 /**********************************************  WIFI Client 注意编译时要设置此值 *********************************
    wifi client
 */
-const char* ssid = "greenioGuest"; //replace "xxxxxx" with your WIFI's ssid
+const char* ssid = "greenio"; //replace "xxxxxx" with your WIFI's ssid
 const char* password = "green7650"; //replace "xxxxxx" with your WIFI's password
-
-//WiFi&OTA 参数
-String HOSTNAME = "CPN-";
-#define PASSWORD "green7650" //the password for OTA upgrade, can set it in any char you want
 
 void setupOTA()
 {
@@ -299,41 +360,6 @@ void HeartBeat() {
   SerialBT.println("Heartbeat");
 }
 
-void setup()
-{
-  HeartBeat();
-  Serial.begin(115200);
-  modbus.begin(9600, SERIAL_8N1, 16, 17);
-  runner.init();
-  Serial.println("Initialized scheduler");
-  runner.addTask(t1);
-  Serial.println("added t1");
-  runner.addTask(t2);
-  Serial.println("added t2");
-  HeartBeat();
-  delay(2000);
-  t1.enable();  Serial.println("Enabled t1");
-  t2.enable();  Serial.println("Enabled t2");
-  HeartBeat();
-  HOSTNAME.concat(getMacAddress());
-  SerialBT.begin(HOSTNAME); //Bluetooth device name
-  SerialBT.println(HOSTNAME);
-  AISnb.debug = true;
-  AISnb.setupDevice(serverPort);
-  HeartBeat();
-  _init();
-  HeartBeat();
-  _loadConfig();
-  Serial.println();
-  Serial.println(F("***********************************"));
-  Serial.println("Initialize...");
-  HeartBeat();
-  setupWIFI();
-  HeartBeat();
-  setupOTA();
-  HeartBeat();
-}
-
 void t2CallsendViaNBIOT ()
 {
   meta = AISnb.getSignal();
@@ -381,7 +407,7 @@ void readWeather(uint16_t  REG)
   float val = 0.0;
   // communicate with Modbus slave ID 1 over Serial (port 2)
   node.begin(ID_PM25, modbus);
-  
+
   // slave: read (6) 16-bit registers starting at register 2 to RX buffer
   result = node.readHoldingRegisters(REG, 8);
   Serial.print("result:"); Serial.print(result); Serial.print(" node.ku8MBSuccess:"); Serial.println(node.ku8MBSuccess);
@@ -411,15 +437,24 @@ void readWeather(uint16_t  REG)
 void readsensor()
 {
   readWeather(_SO2);
-  Serial.print("sensor.SO2:"); Serial.println( sensor.SO2);
-  Serial.print("sensor.NO2:"); Serial.println( sensor.NO2);
-  Serial.print("sensor.CO:"); Serial.println( sensor.CO);
-  Serial.print("sensor.O3:"); Serial.println( sensor.O3);
-  Serial.print("sensor.PM25:"); Serial.println( sensor.PM2_5);
-  Serial.print("sensor.PM10:"); Serial.println( sensor.PM10);
-  Serial.print("sensor.temp:"); Serial.println( sensor.temp);
-  Serial.print("sensor.hum:"); Serial.println( sensor.hum);
+  Serial.print("SO2 : "); Serial.println( sensor.SO2);
+  Serial.print("NO2 : "); Serial.println( sensor.NO2);
+  Serial.print("CO : "); Serial.println( sensor.CO);
+  Serial.print("O3 : "); Serial.println( sensor.O3);
+  Serial.print("PM25 : "); Serial.println( sensor.PM2_5);
+  Serial.print("PM10 : "); Serial.println( sensor.PM10);
+  Serial.print("temp : "); Serial.println( sensor.temp);
+  Serial.print("hum : "); Serial.println( sensor.hum);
   Serial.println("");
+  SerialBT.print("SO2 : "); SerialBT.println( sensor.SO2);
+  SerialBT.print("NO2 : "); SerialBT.println( sensor.NO2);
+  SerialBT.print("CO : "); SerialBT.println( sensor.CO);
+  SerialBT.print("O3 : "); SerialBT.println( sensor.O3);
+  SerialBT.print("PM25 : "); SerialBT.println( sensor.PM2_5);
+  SerialBT.print("PM10 : "); SerialBT.println( sensor.PM10);
+  SerialBT.print("temp : "); SerialBT.println( sensor.temp);
+  SerialBT.print("hum : "); SerialBT.println( sensor.hum);
+  SerialBT.println("");
 }
 
 void t1Callgetsensor() {     // Update read all data
@@ -458,30 +493,6 @@ int getResult( unsigned int x_high, unsigned int x_low)
   Serial.print("hex:");  Serial.println(hex2);
   Serial.print("dec:");  Serial.println(hexToDec(hex2));                                                               //rightmost 8 bits
   return hexToDec(hex2);
-}
-
-void loop()
-{
-  runner.execute();
-  ArduinoOTA.handle();
-  ms = millis();
-  if (ms % 600000 == 0)
-  {
-    Serial.println("Attach WiFi for，OTA "); Serial.println(WiFi.RSSI() );
-    SerialBT.println("Attach WiFi for OTA"); SerialBT.println(WiFi.RSSI() );
-    setupWIFI();
-    HeartBeat();
-    setupOTA();
-  }
-  if (ms % 60000 == 0)
-  {
-    Serial.println("Waiting for，OTA now"); Serial.println(WiFi.RSSI() );
-    SerialBT.println("Waiting for, OTA now"); SerialBT.println(WiFi.RSSI() );
-  }
-  if (ms % 10000 == 0)
-  {
-    HeartBeat();
-  }
 }
 
 /****************************************************

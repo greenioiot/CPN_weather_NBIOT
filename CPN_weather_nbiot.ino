@@ -7,16 +7,27 @@
 #include <ModbusMaster.h>
 #include "REG_CONFIG.h"
 #include <HardwareSerial.h>
-#include "HardwareSerial_NB_BC95.h"
-#include <TaskScheduler.h>
+#include "NB_BC95_G.h"
+
+
 #include <ArduinoOTA.h>
 #include <WiFi.h>
 #include <Wire.h>
 
-#define _TASK_TIMECRITICAL
 
 HardwareSerial modbus(2);
-HardwareSerial_NB_BC95 AISnb;
+HardwareSerial myserial(1);
+
+
+#define SERIAL1_RXPIN 27
+#define SERIAL1_TXPIN 14
+
+char buffer_receive[1000];
+unsigned int count_buffer = 0;
+String data_str = "";
+int read_timeout = 0;
+
+NB_BC95_G AISnb;
 
 BluetoothSerial SerialBT;
 
@@ -28,24 +39,12 @@ String json = "";
 
 ModbusMaster node;
 
-void t1Callgetsensor();
-void t2CallsendViaNBIOT();
-
-//TASK
-Task t1(250000, TASK_FOREVER, &t1Callgetsensor);
-Task t2(300000, TASK_FOREVER, &t2CallsendViaNBIOT);
 
 #define trigWDTPin    32
 #define ledHeartPIN   0
 
-Scheduler runner;
-String _config = "{\"_type\":\"retrattr\",\"Tn\":\"8966031940014308310\",\"keys\":[\"epoch\",\"ip\"]}";
-unsigned long _epoch = 0;
-String _IP = "";
-String dataJson = "";
-boolean validEpoc = false;
 
-StaticJsonDocument<400> doc;
+
 
 struct pm2510
 {
@@ -60,7 +59,7 @@ struct pm2510
 };
 pm2510 sensor ;
 
-signal meta;
+
 unsigned long ms;
 uint16_t dataWeather[8];
 
@@ -73,26 +72,39 @@ void setup()
   HeartBeat();
   Serial.begin(115200);
   modbus.begin(9600, SERIAL_8N1, 16, 17);
-  runner.init();
-  Serial.println("Initialized scheduler");
-  runner.addTask(t1);
-  Serial.println("added t1");
-  runner.addTask(t2);
-  Serial.println("added t2");
+
+
   HeartBeat();
   delay(2000);
-  t1.enable();  Serial.println("Enabled t1");
-  t2.enable();  Serial.println("Enabled t2");
+
   HeartBeat();
   HOSTNAME.concat(getMacAddress());
   SerialBT.begin(HOSTNAME); //Bluetooth device name
   SerialBT.println(HOSTNAME);
   AISnb.debug = true;
+  AISnb.delayAfterCommand = 1000;
+  AISnb.begin(9600, SERIAL_8N1, SERIAL1_RXPIN, SERIAL1_TXPIN);
+  Serial.println("Waiting for AIS NB test status!");
+  while (!AISnb.testCommand().status)
+  {
+    Serial.print('.');
+    SerialBT.print(',');
+  }
+  Serial.println("AIS NB OK!");
+  SerialBT.println("AIS NB OK!");
+
   AISnb.setupDevice(serverPort);
+  nb_resp_t res_DeviceIP = AISnb.getDeviceIP();
+  nb_resp_t res_testPing = AISnb.testPing(serverIP);
+  nb_resp_t res_nccid = AISnb.getNCCID();
+  deviceToken = res_nccid.data;
+  SerialBT.print("NCCID:");
+  SerialBT.println(deviceToken);
+  Serial.print("NCCID:");
+  Serial.println(deviceToken);
   HeartBeat();
-  _init();
-  HeartBeat();
-  _loadConfig();
+
+
   Serial.println();
   Serial.println(F("***********************************"));
   Serial.println("Initialize...");
@@ -101,14 +113,15 @@ void setup()
   HeartBeat();
   setupOTA();
   HeartBeat();
+
 }
 
 void loop()
 {
-  runner.execute();
+
   ArduinoOTA.handle();
   ms = millis();
-  if (ms % 600000 == 0)
+  if (ms % 60000 == 0)
   {
     Serial.println("Attach WiFi for，OTA "); Serial.println(WiFi.RSSI() );
     SerialBT.println("Attach WiFi for OTA"); SerialBT.println(WiFi.RSSI() );
@@ -116,30 +129,27 @@ void loop()
     HeartBeat();
     setupOTA();
   }
-  if (ms % 60000 == 0)
+  if (ms % 120000 == 0)
   {
-    Serial.println("Waiting for，OTA now"); Serial.println(WiFi.RSSI() );
-    SerialBT.println("Waiting for, OTA now"); SerialBT.println(WiFi.RSSI() );
+    t2CallsendViaNBIOT();
+    nb_resp_t res_send = AISnb.sendUDPMessage(1, serverIP, serverPort, json.length(), json, MODE_STRING_HEX);
+    if (!res_send.status)
+    {
+      AISnb.createUDPSocket(serverPort);
+    }
+    String getResponse = AISnb.getSocketResponse();
+    if (getResponse.length() > 0) {
+      Serial.print("UDP response: ");
+      Serial.println(getResponse);
+      SerialBT.print("UDP response: ");
+      SerialBT.println(getResponse);
+    }
   }
-  if (ms % 10000 == 0)
-  {
-    HeartBeat();
-  }
+
 }
 
-void _writeEEPROM(String data) {
-  Serial.print("Writing Data:");
-  Serial.println(data);
-  writeString(10, data);  //Address 10 and String type data
-  delay(10);
-}
 
-void _loadConfig() {
-  serverIP = read_String(10);
-  serverIP.trim();
-  Serial.print("IP:");
-  Serial.println(serverIP);
-}
+
 
 char  char_to_byte(char c)
 {
@@ -153,82 +163,6 @@ char  char_to_byte(char c)
   }
 }
 
-void _init() {
-  Serial.println(_config);
-  do {
-    UDPSend udp = AISnb.sendUDPmsgStr(serverIP, serverPort, _config);
-    dataJson = "";
-    deviceToken = AISnb.getNCCID();
-    Serial.print("NCCID : ");
-    Serial.println(deviceToken);
-    SerialBT.print("NCCID : ");
-    SerialBT.println(deviceToken);
-    UDPReceive resp = AISnb.waitResponse();
-    AISnb.receive_UDP(resp);
-    Serial.print("waitData:");
-    Serial.println(resp.data);
-    for (int x = 0; x < resp.data.length(); x += 2)
-    {
-      char c =  char_to_byte(resp.data[x]) << 4 | char_to_byte(resp.data[x + 1]);
-
-      dataJson += c;
-    }
-    Serial.println(dataJson);
-    DeserializationError error = deserializeJson(doc, dataJson);
-
-    // Test if parsing succeeds.
-    if (error) {
-      Serial.print(F("deserializeJson() failed: "));
-      Serial.println(error.f_str());
-      validEpoc = true;
-      delay(4000);
-    } else {
-      validEpoc = false;
-      unsigned long epoch = doc["epoch"];
-      _epoch = epoch;
-      String ip = doc["ip"];
-      _IP = ip;
-      Serial.println(dataJson);
-      Serial.print("epoch:");  Serial.println(_epoch);
-      _writeEEPROM(_IP);
-      Serial.println(_IP);
-    }
-    delay(5000);
-    HeartBeat();
-  } while (validEpoc);
-}
-
-void writeString(char add, String data)
-{
-  EEPROM.begin(512);
-  int _size = data.length();
-  int i;
-  for (i = 0; i < _size; i++)
-  {
-    EEPROM.write(add + i, data[i]);
-  }
-  EEPROM.write(add + _size, '\0'); //Add termination null character for String Data
-  EEPROM.commit();
-}
-
-String read_String(char add)
-{
-  int i;
-  char data[100]; //Max 100 Bytes
-  int len = 0;
-  unsigned char k;
-  k = EEPROM.read(add);
-  while (k != '\0' && len < 500) //Read until null character
-  {
-    k = EEPROM.read(add + len);
-    data[len] = k;
-    len++;
-  }
-  data[len] = '\0';
-  Serial.print("Debug:");
-  Serial.println(String(data));
-  return String(data);
-}
 
 /**********************************************  WIFI Client 注意编译时要设置此值 *********************************
    wifi client
@@ -359,44 +293,42 @@ void HeartBeat() {
   Serial.println("Heartbeat");
   SerialBT.println("Heartbeat");
 }
-
+\
 void t2CallsendViaNBIOT ()
 {
-  meta = AISnb.getSignal();
-  Serial.print("RSSI:"); Serial.println(meta.rssi);
+  readsensor();
+  nb_signal_t res_signal = AISnb.getSignal();
+  SerialBT.print("RSSI:");
+  SerialBT.println(res_signal.rssi);
+  Serial.print("RSSI:");
+  Serial.println(res_signal.rssi);
   json = "";
   json.concat("{\"Tn\":\"");
   json.concat(deviceToken);
-  json.concat("\",\"SO2\":");
+  json.concat("\",\"so2\":");
   json.concat(sensor.SO2);
-  json.concat(",\"NO2\":");
+  json.concat(",\"no2\":");
   json.concat(sensor.NO2);
-  json.concat(",\"CO\":");
+  json.concat(",\"co\":");
   json.concat(sensor.CO);
-  json.concat(",\"O3\":");
+  json.concat(",\"o3\":");
   json.concat(sensor.O3);
-  json.concat(",\"PM2_5\":");
+  json.concat(",\"pm2.5\":");
   json.concat(sensor.PM2_5);
-  json.concat(",\"PM10\":");
+  json.concat(",\"pm10\":");
   json.concat(sensor.PM10);
   json.concat(",\"temp\":");
   json.concat(sensor.temp);
   json.concat(",\"hum\":");
   json.concat(sensor.hum);
-  json.concat(",\"rssi\":");
-  json.concat(meta.rssi);
-  json.concat(",\"csq\":");
-  json.concat(meta.csq);
+  json.concat(",\"RSSI\":");
+  json.concat(res_signal.rssi);
+
   json.concat("}");
   Serial.println(json);
   SerialBT.println(json);
-  //
-  UDPSend udp = AISnb.sendUDPmsgStr(serverIP, serverPort, json);
-  UDPReceive resp = AISnb.waitResponse();
-  Serial.print("rssi:");
-  Serial.println(meta.rssi);
-  SerialBT.print("rssi:");
-  SerialBT.println(meta.rssi);
+
+
 }
 
 void readWeather(uint16_t  REG)
@@ -431,6 +363,7 @@ void readWeather(uint16_t  REG)
     sensor.hum = dataWeather[7] / 100;
   } else {
     Serial.print("Connec modbus fail. REG >>> "); Serial.println(REG, HEX); // Debug
+    SerialBT.print("Connec modbus fail. REG >>> "); SerialBT.println(REG, HEX); // Debug
   }
 }
 
@@ -457,9 +390,6 @@ void readsensor()
   SerialBT.println("");
 }
 
-void t1Callgetsensor() {     // Update read all data
-  readsensor();
-}
 
 float HexTofloat(uint32_t x)
 {
